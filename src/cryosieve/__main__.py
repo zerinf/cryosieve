@@ -99,6 +99,7 @@ def main():
                 f'--angpix {args.angpix}',
                 '--auto_bfac',
                 '--autob_lowres 10',
+                '--random_seed 0',
                 f'>"{str(dst / f"postprocess_iter{i}.txt")}"',
             ])
             run_commands(command, f'postprocess (iteration {i})')
