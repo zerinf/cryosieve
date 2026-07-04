@@ -15,9 +15,6 @@ provides:
     - particle-set.consumer
     - particle-selection.producer
     - csrefine.producer
-requires:
-  external:
-    - relion
 lineage:
   consumes:
     - capability: particle-set.producer
