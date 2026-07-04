@@ -1,7 +1,15 @@
 import argparse
+import os
 import shlex
 import sys
+from pathlib import Path
 from .logger import logger
+
+
+def job_log_path(output_dir, log_name):
+    job_dir = os.environ.get('COCO_JOB_DIR')
+    base = Path(job_dir).absolute() if job_dir else output_dir
+    return base / log_name
 
 def parse_argument():
     parser = argparse.ArgumentParser(description = 'CryoSieve: a particle sorting and sieving software for single particle analysis in cryo-EM')
@@ -33,7 +41,6 @@ def main():
     check_cupy()
 
     import numpy as np
-    from pathlib import Path
     from .ParticleDataset import ParticleDataset
     from .utility import run_commands
 
@@ -61,8 +68,10 @@ def main():
         logger.info(f'Start iteration {i}, overall retaining ratio {overall_retention_ratio * 100:.2f}%, threshold frequency {frequences[i]:.2f} Angstrom')
 
         # reconstruct.
+        dfr_log = job_log_path(dst, 'copra_spa_3d_reconstruction_dfr.log')
         commands = [
             ' '.join([
+                f'COCO_JOB_LOG={shlex.quote(str(dfr_log))}',
                 args.reconstruct_software,
                 f'--i "{str(dst / f"iter{i}.star")}"',
                 f'--o "{str(dst / f"iter{i}_half1.mrc")}"',
@@ -70,9 +79,9 @@ def main():
                 f'--sym {args.sym}',
                 '--ctf true',
                 '--subset 1',
-                f'>"{str(dst / f"iter{i}_reconstruct_half1.txt")}"',
             ]),
             ' '.join([
+                f'COCO_JOB_LOG={shlex.quote(str(dfr_log))}',
                 args.reconstruct_software,
                 f'--i "{str(dst / f"iter{i}.star")}"',
                 f'--o "{str(dst / f"iter{i}_half2.mrc")}"',
@@ -80,7 +89,6 @@ def main():
                 f'--sym {args.sym}',
                 '--ctf true',
                 '--subset 2',
-                f'>"{str(dst / f"iter{i}_reconstruct_half2.txt")}"',
             ])
         ]
         run_commands(commands, f'3D-reconstruction (iteration {i})', cwd = data_dir)
@@ -90,7 +98,7 @@ def main():
             pp_dir = dst / f'postprocess_iter{i}'
             pp_dir.mkdir(parents = True, exist_ok = True)
             command = ' '.join([
-                f'COCO_JOB_LOG={shlex.quote(str(pp_dir / "postprocess.log"))}',
+                f'COCO_JOB_LOG={shlex.quote(str(job_log_path(dst, "postprocess.log")))}',
                 args.postprocess_software,
                 f'--mask "{args.mask}"',
                 f'--i "{str(dst / f"iter{i}_half1.mrc")}"',
@@ -100,7 +108,6 @@ def main():
                 '--auto_bfac',
                 '--autob_lowres 10',
                 '--random_seed 0',
-                f'>"{str(dst / f"postprocess_iter{i}.txt")}"',
             ])
             run_commands(command, f'postprocess (iteration {i})')
 
