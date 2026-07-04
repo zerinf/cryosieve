@@ -90,6 +90,7 @@ def main():
             pp_dir = dst / f'postprocess_iter{i}'
             pp_dir.mkdir(parents = True, exist_ok = True)
             command = ' '.join([
+                f'COCO_JOB_LOG={shlex.quote(str(pp_dir / "postprocess.log"))}',
                 args.postprocess_software,
                 f'--mask "{args.mask}"',
                 f'--i "{str(dst / f"iter{i}_half1.mrc")}"',
