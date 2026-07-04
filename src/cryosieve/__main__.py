@@ -6,10 +6,26 @@ from pathlib import Path
 from .logger import logger
 
 
+CRYOSIEVE_LOG_NAME = 'cryosieve.log'
+DFR_LOG_NAME = 'copra_spa_3d_reconstruction_dfr.log'
+POSTPROCESS_LOG_NAME = 'postprocess.log'
+
+
 def job_log_path(output_dir, log_name):
     job_dir = os.environ.get('COCO_JOB_DIR')
     base = Path(job_dir).absolute() if job_dir else output_dir
     return base / log_name
+
+
+def child_env(output_dir, job_log_name = None, cryosieve_log = False):
+    env = os.environ.copy()
+    if job_log_name is None:
+        env.pop('COCO_JOB_LOG', None)
+    else:
+        env['COCO_JOB_LOG'] = str(job_log_path(output_dir, job_log_name))
+    if cryosieve_log:
+        env['COCO_CRYOSIEVE_LOG'] = str(job_log_path(output_dir, CRYOSIEVE_LOG_NAME))
+    return env
 
 def parse_argument():
     parser = argparse.ArgumentParser(description = 'CryoSieve: a particle sorting and sieving software for single particle analysis in cryo-EM')
@@ -68,10 +84,8 @@ def main():
         logger.info(f'Start iteration {i}, overall retaining ratio {overall_retention_ratio * 100:.2f}%, threshold frequency {frequences[i]:.2f} Angstrom')
 
         # reconstruct.
-        dfr_log = job_log_path(dst, 'copra_spa_3d_reconstruction_dfr.log')
         commands = [
             ' '.join([
-                f'COCO_JOB_LOG={shlex.quote(str(dfr_log))}',
                 args.reconstruct_software,
                 f'--i "{str(dst / f"iter{i}.star")}"',
                 f'--o "{str(dst / f"iter{i}_half1.mrc")}"',
@@ -81,7 +95,6 @@ def main():
                 '--subset 1',
             ]),
             ' '.join([
-                f'COCO_JOB_LOG={shlex.quote(str(dfr_log))}',
                 args.reconstruct_software,
                 f'--i "{str(dst / f"iter{i}.star")}"',
                 f'--o "{str(dst / f"iter{i}_half2.mrc")}"',
@@ -91,14 +104,13 @@ def main():
                 '--subset 2',
             ])
         ]
-        run_commands(commands, f'3D-reconstruction (iteration {i})', cwd = data_dir)
+        run_commands(commands, f'3D-reconstruction (iteration {i})', cwd = data_dir, env = child_env(dst, DFR_LOG_NAME))
 
         # postprocess.
         if args.postprocess_software is not None:
             pp_dir = dst / f'postprocess_iter{i}'
             pp_dir.mkdir(parents = True, exist_ok = True)
             command = ' '.join([
-                f'COCO_JOB_LOG={shlex.quote(str(job_log_path(dst, "postprocess.log")))}',
                 args.postprocess_software,
                 f'--mask "{args.mask}"',
                 f'--i "{str(dst / f"iter{i}_half1.mrc")}"',
@@ -109,7 +121,7 @@ def main():
                 '--autob_lowres 10',
                 '--random_seed 0',
             ])
-            run_commands(command, f'postprocess (iteration {i})')
+            run_commands(command, f'postprocess (iteration {i})', env = child_env(dst, POSTPROCESS_LOG_NAME))
 
         # sieve.
         command = ' '.join([
@@ -126,7 +138,7 @@ def main():
             f'--frequency {frequences[i]:.3f}',
             f'--num_gpus {args.num_gpus}',
         ])
-        run_commands(command, f'sieve (iteration {i})')
+        run_commands(command, f'sieve (iteration {i})', env = child_env(dst, cryosieve_log = True))
         overall_retention_ratio *= args.retention_ratio
 
     logger.info('Execute CryoSieve successfully')

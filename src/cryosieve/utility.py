@@ -36,14 +36,14 @@ def mrcread(fpath, i_slc : Optional[int] = None, cached_mrc_handles : Optional[d
 
     return data
 
-def run_commands(commands, jobname = '', stdout = None, cwd = None):
+def run_commands(commands, jobname = '', stdout = None, cwd = None, env = None):
     import subprocess
     from .logger import logger
     from time import time
 
     time0 = time()
     if isinstance(commands, str): commands = [commands]
-    processes = [subprocess.Popen(command, shell = True, stdout = stdout, cwd = cwd) for command in commands]
+    processes = [subprocess.Popen(command, shell = True, stdout = stdout, cwd = cwd, env = env) for command in commands]
     for process in processes: process.wait()
     time1 = time()
 
