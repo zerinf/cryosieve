@@ -1,9 +1,51 @@
+import os
+from dataclasses import dataclass
+
 import cupy as cp
 import numpy as np
+import torch
+import torch.distributed as dist
 from threading import Thread
 from torch.utils.data import DataLoader
 from .kernels import convolute_ctf, highpass2d, project, translate
 from .logger import logger
+
+
+@dataclass(frozen=True)
+class DistributedContext:
+    rank: int
+    local_rank: int
+    world_size: int
+    distributed: bool
+
+    @property
+    def is_main(self):
+        return self.rank == 0
+
+
+def init_distributed():
+    world_size = int(os.environ.get('WORLD_SIZE', '1'))
+    rank = int(os.environ.get('RANK', '0'))
+    local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+    distributed = world_size > 1
+    if distributed:
+        if not torch.cuda.is_available():
+            raise RuntimeError('Distributed CryoSieve requires CUDA')
+        torch.cuda.set_device(local_rank)
+        cp.cuda.runtime.setDevice(local_rank)
+        if not dist.is_initialized():
+            dist.init_process_group(backend = 'nccl')
+    return DistributedContext(rank = rank, local_rank = local_rank, world_size = world_size, distributed = distributed)
+
+
+def destroy_distributed():
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def barrier(ctx):
+    if ctx is not None and ctx.distributed and dist.is_initialized():
+        dist.barrier()
 
 def collate_fn(batch):
     imgs, paras = zip(*batch)
@@ -11,7 +53,7 @@ def collate_fn(batch):
     paras = np.stack(paras)
     return imgs, paras
 
-def score_particles(dataset, volume, threshold, device_id, num_gpus, g):
+def score_particles(dataset, volume, threshold, device_id, num_gpus, g, cuda_device_id = None):
     m = len(dataset)
     batch_size = 50
 
@@ -25,7 +67,7 @@ def score_particles(dataset, volume, threshold, device_id, num_gpus, g):
     log_interval = min(max(1, (n_batch + 4) // 5), 200)
     scores = cp.empty(r - l, dtype = cp.float64)
 
-    cp.cuda.runtime.setDevice(device_id)
+    cp.cuda.runtime.setDevice(device_id if cuda_device_id is None else cuda_device_id)
     volume = cp.asarray(volume, dtype = cp.float64)
 
     for i_batch, batch in enumerate(loader):
@@ -56,26 +98,45 @@ def score_particles_safe(dataset, volume, threshold, device_id, num_gpus, g, err
     except BaseException as error:
         errors[device_id] = error
 
-def sieve(dataset, volume, threshold, number, num_gpus):
+
+def score_particles_distributed(dataset, volume, threshold, ctx):
     m = len(dataset)
-    g = np.empty(m, dtype = np.float64)
-    errors = [None] * num_gpus
+    l, r = round(ctx.rank / ctx.world_size * m), round((ctx.rank + 1) / ctx.world_size * m)
+    local_mask = np.zeros(m, dtype = np.bool_)
+    local_mask[l : r] = True
+    local_dataset = dataset.subset(local_mask)
+    local_scores = np.empty(r - l, dtype = np.float64)
+    score_particles(local_dataset, volume, threshold, 0, 1, local_scores, ctx.local_rank)
+    scores = torch.zeros(m, device = torch.device(f'cuda:{ctx.local_rank}'), dtype = torch.float64)
+    if r > l:
+        scores[l : r] = torch.as_tensor(local_scores, device = scores.device, dtype = scores.dtype)
+    dist.all_reduce(scores, op = dist.ReduceOp.SUM)
+    return scores.cpu().numpy()
 
-    if num_gpus == 1:
-        score_particles(dataset, volume, threshold, 0, 1, g)
+
+def sieve(dataset, volume, threshold, number, num_gpus, ctx = None):
+    m = len(dataset)
+    if ctx is not None and ctx.distributed:
+        g = score_particles_distributed(dataset, volume, threshold, ctx)
     else:
-        threads = [
-            Thread(target = score_particles_safe, args = (dataset, volume, threshold, tid, num_gpus, g, errors))
-            for tid in range(num_gpus)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        g = np.empty(m, dtype = np.float64)
+        errors = [None] * num_gpus
 
-        for error in errors:
-            if error is not None:
-                raise error
+        if num_gpus == 1:
+            score_particles(dataset, volume, threshold, 0, 1, g)
+        else:
+            threads = [
+                Thread(target = score_particles_safe, args = (dataset, volume, threshold, tid, num_gpus, g, errors))
+                for tid in range(num_gpus)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            for error in errors:
+                if error is not None:
+                    raise error
 
     indices = np.argsort(g)
     mask = np.zeros(m, dtype = np.bool_)

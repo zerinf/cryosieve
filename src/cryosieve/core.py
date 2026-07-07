@@ -18,19 +18,22 @@ def parse_arguments():
         exit()
     return parser.parse_args()
 
-def process(args):
+def process(args, ctx = None):
     import numpy as np
     from pathlib import Path
     from .ParticleDataset import ParticleDataset
     from .utility import mrcread
-    from .sieve import sieve
+    from .sieve import barrier, sieve
 
     # Initialize.
-    from cupy.cuda.runtime import getDeviceCount
-    if args.num_gpus < 1:
-        raise ValueError('`--num_gpus` should be positive')
-    if args.num_gpus > getDeviceCount():
-        raise ValueError(f'`--num_gpus` is {args.num_gpus}, but only {getDeviceCount()} CUDA device(s) are available')
+    from cupy.cuda.runtime import getDeviceCount, setDevice
+    if ctx is not None and ctx.distributed:
+        setDevice(ctx.local_rank)
+    else:
+        if args.num_gpus < 1:
+            raise ValueError('`--num_gpus` should be positive')
+        if args.num_gpus > getDeviceCount():
+            raise ValueError(f'`--num_gpus` is {args.num_gpus}, but only {getDeviceCount()} CUDA device(s) are available')
 
     # Input.
     dataset     = ParticleDataset(args.i, args.directory, args.angpix)
@@ -50,16 +53,20 @@ def process(args):
     mask = np.zeros(len(dataset), dtype = np.bool_)
     for i in range(n_subset):
         subset = dataset.get_random_subset(i + 1)
-        logger.info(f'Start sieving subset {i}, {len(subset)} particles')
+        if ctx is None or ctx.is_main:
+            logger.info(f'Start sieving subset {i}, {len(subset)} particles')
         n_rem = round(ratio * len(subset))
-        subset_rem = sieve(subset, volumes[i], threshold, n_rem, args.num_gpus)
-        mask[subset_rem.indices] = True
-        logger.info(f'Finish sieving subset {i}, {n_rem} particles remained')
+        subset_rem = sieve(subset, volumes[i], threshold, n_rem, args.num_gpus, ctx)
+        if ctx is None or ctx.is_main:
+            mask[subset_rem.indices] = True
+            logger.info(f'Finish sieving subset {i}, {n_rem} particles remained')
 
-    dataset_rem = dataset.subset(mask)
-    dataset_sie = dataset.subset(~mask)
-    dataset_rem.save(output_path)
-    dataset_sie.save(output_path.with_stem(output_path.stem + '_sieved'))
+    if ctx is None or ctx.is_main:
+        dataset_rem = dataset.subset(mask)
+        dataset_sie = dataset.subset(~mask)
+        dataset_rem.save(output_path)
+        dataset_sie.save(output_path.with_stem(output_path.stem + '_sieved'))
+    barrier(ctx)
 
 def main():
     args = parse_arguments()
@@ -68,10 +75,16 @@ def main():
     check_cupy()
 
     from time import time
+    from .sieve import destroy_distributed, init_distributed
+    ctx = init_distributed()
     time0 = time()
-    process(args)
+    try:
+        process(args, ctx)
+    finally:
+        destroy_distributed()
     time1 = time()
-    logger.info(f'Execute cryosieve-core successfully in {time1 - time0:.2f}s')
+    if ctx.is_main:
+        logger.info(f'Execute cryosieve-core successfully in {time1 - time0:.2f}s')
 
 if __name__ == '__main__':
     main()
