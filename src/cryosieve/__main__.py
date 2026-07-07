@@ -4,11 +4,10 @@ from argparse import Namespace
 from pathlib import Path
 from .logger import logger
 from .reconstruct_runner import (
-    CRYOSIEVE_LOG_NAME,
     DFR_LOG_NAME,
     POSTPROCESS_LOG_NAME,
     child_env,
-    job_log_path,
+    is_coco_dfr_reconstruct,
     run_reconstruct_commands,
 )
 
@@ -28,6 +27,8 @@ def parse_argument():
     parser.add_argument('--retention_ratio',      type = float, default  = 0.8,   help = 'fraction of retained particles in each iteration, 0.8 by default')
     parser.add_argument('--mask',                 type = str,   required = True,  help = 'mask file path')
     parser.add_argument('--balance',              action = 'store_true',          help = 'randomly drop particles to make all subset into the same size')
+    parser.add_argument('--iterative-gridding-correction', dest = 'iterative_gridding_correction', action = 'store_true', default = True, help = 'enable iterative gridding correction during reconstruction')
+    parser.add_argument('--no-iterative-gridding-correction', dest = 'iterative_gridding_correction', action = 'store_false', help = 'disable iterative gridding correction during reconstruction')
     parser.add_argument('--num_gpus',             type = int,   default  = 1,     help = 'number of gpus to execute CryoSieve core program, 1 by default')
     if len(sys.argv) == 1:
         parser.print_help()
@@ -63,6 +64,9 @@ def main():
         if not dst.is_dir():
             raise ValueError(f'{args.o} is not a directory or cannot be created')
 
+        gridding_correction_flag = '--iterative-gridding-correction' if args.iterative_gridding_correction else '--no-iterative-gridding-correction'
+        gridding_correction_arg = gridding_correction_flag if is_coco_dfr_reconstruct(args.reconstruct_software) else ''
+
         dataset = ParticleDataset(src, args.directory, args.angpix)
         data_dir = dataset.data_dir.absolute()
         if ctx.is_main:
@@ -89,6 +93,7 @@ def main():
                     f'--angpix {args.angpix}',
                     f'--sym {args.sym}',
                     '--ctf true',
+                    gridding_correction_arg,
                     '--subset 1',
                 ]),
                 ' '.join([
@@ -98,6 +103,7 @@ def main():
                     f'--angpix {args.angpix}',
                     f'--sym {args.sym}',
                     '--ctf true',
+                    gridding_correction_arg,
                     '--subset 2',
                 ])
             ]
