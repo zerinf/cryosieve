@@ -1,47 +1,16 @@
 import argparse
-import os
 import sys
 from argparse import Namespace
 from pathlib import Path
 from .logger import logger
-
-
-CRYOSIEVE_LOG_NAME = 'cryosieve.log'
-DFR_LOG_NAME = 'copra_spa_3d_reconstruction_dfr.log'
-POSTPROCESS_LOG_NAME = 'postprocess.log'
-DISTRIBUTED_ENV_KEYS = (
-    'LOCAL_RANK',
-    'RANK',
-    'WORLD_SIZE',
-    'GROUP_RANK',
-    'ROLE_RANK',
-    'ROLE_WORLD_SIZE',
-    'LOCAL_WORLD_SIZE',
-    'MASTER_ADDR',
-    'MASTER_PORT',
-    'TORCHELASTIC_RUN_ID',
-    'TORCHELASTIC_RESTART_COUNT',
-    'TORCHELASTIC_MAX_RESTARTS',
+from .reconstruct_runner import (
+    CRYOSIEVE_LOG_NAME,
+    DFR_LOG_NAME,
+    POSTPROCESS_LOG_NAME,
+    child_env,
+    job_log_path,
+    run_reconstruct_commands,
 )
-
-
-def job_log_path(output_dir, log_name):
-    job_dir = os.environ.get('COCO_JOB_DIR')
-    base = Path(job_dir).absolute() if job_dir else output_dir
-    return base / log_name
-
-
-def child_env(output_dir, job_log_name = None, cryosieve_log = False):
-    env = os.environ.copy()
-    for key in DISTRIBUTED_ENV_KEYS:
-        env.pop(key, None)
-    if job_log_name is None:
-        env.pop('COCO_JOB_LOG', None)
-    else:
-        env['COCO_JOB_LOG'] = str(job_log_path(output_dir, job_log_name))
-    if cryosieve_log:
-        env['COCO_CRYOSIEVE_LOG'] = str(job_log_path(output_dir, CRYOSIEVE_LOG_NAME))
-    return env
 
 
 def parse_argument():
@@ -132,9 +101,16 @@ def main():
                     '--subset 2',
                 ])
             ]
-            if ctx.is_main:
-                run_commands(commands, f'3D-reconstruction (iteration {i})', cwd = data_dir, env = child_env(dst, DFR_LOG_NAME))
-            barrier(ctx)
+            run_reconstruct_commands(
+                commands,
+                f'3D-reconstruction (iteration {i})',
+                cwd = data_dir,
+                output_dir = dst,
+                ctx = ctx,
+                reconstruct_software = args.reconstruct_software,
+                barrier_func = barrier,
+                iteration = i,
+            )
 
             # postprocess.
             if ctx.is_main and args.postprocess_software is not None:
