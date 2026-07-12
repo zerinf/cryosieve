@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 from threading import Lock
-from .logger import logger
+from .logger import configure_logging, emit_progress, logger
 
 cryosparc_job_total = None
 cryosparc_jobs_generated = 0
@@ -73,6 +73,15 @@ def enqueue_and_wait(session, lane, **kwargs):
         if dry_run:
             cryosparc_jobs_completed += 1
             logger.info(f'[{cryosparc_jobs_completed}/{cryosparc_job_total}] Dry run: skip waiting for CryoSPARC job {job_id} ({job_type})')
+            emit_progress(
+                'cs-refine',
+                'cryosparc-job-complete',
+                cryosparc_jobs_completed,
+                cryosparc_job_total,
+                'cryosparc-job',
+                metadata={'jobId': job_id, 'jobType': job_type, 'dryRun': True},
+                checkpoint={'jobId': job_id, 'status': 'completed'},
+            )
             return job_id
 
     while True:
@@ -82,6 +91,15 @@ def enqueue_and_wait(session, lane, **kwargs):
             if job_status == 'completed':
                 cryosparc_jobs_completed += 1
                 logger.info(f'[{cryosparc_jobs_completed}/{cryosparc_job_total}] Completed CryoSPARC job {job_id} ({job_type})')
+                emit_progress(
+                    'cs-refine',
+                    'cryosparc-job-complete',
+                    cryosparc_jobs_completed,
+                    cryosparc_job_total,
+                    'cryosparc-job',
+                    metadata={'jobId': job_id, 'jobType': job_type},
+                    checkpoint={'jobId': job_id, 'status': 'completed'},
+                )
                 return job_id
             elif job_status in ['failed', 'killed']:
                 logger.error(f'[{cryosparc_jobs_completed}/{cryosparc_job_total}] CryoSPARC job {job_id} {job_status} ({job_type})')
@@ -201,6 +219,10 @@ def parse_meta_paths(paths):
     return particle_meta_paths
 
 def process(args):
+    global cryosparc_jobs_generated, cryosparc_jobs_enqueued, cryosparc_jobs_completed
+    cryosparc_jobs_generated = 0
+    cryosparc_jobs_enqueued = 0
+    cryosparc_jobs_completed = 0
     client, user_id = load_cryosparc(args)
     session = (client, user_id, args.project, args.workspace, args.lane)
 
@@ -292,8 +314,13 @@ def process(args):
             csvwriter.writerow([particle_meta_path] + result)
 
 def main():
+    configure_logging(source='cs-refine')
     args = parse_argument()
-    process(args)
+    try:
+        process(args)
+    except Exception:
+        logger.exception('CryoSPARC refinement orchestration failed')
+        raise
 
 if __name__ == '__main__':
     main()

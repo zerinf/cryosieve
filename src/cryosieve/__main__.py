@@ -2,7 +2,7 @@ import argparse
 import sys
 from argparse import Namespace
 from pathlib import Path
-from .logger import logger
+from .logger import configure_logging, emit_progress, logger
 from .reconstruct_runner import (
     DFR_LOG_NAME,
     POSTPROCESS_LOG_NAME,
@@ -37,6 +37,7 @@ def parse_argument():
 
 
 def main():
+    configure_logging(source='cryosieve')
     args = parse_argument()
     if args.postprocess_software is not None:
         logger.warning('Argument `--postprocess_software` will be deprecated')
@@ -49,8 +50,9 @@ def main():
     from .sieve import barrier, destroy_distributed, init_distributed
     from .utility import run_commands
 
-    ctx = init_distributed()
+    ctx = None
     try:
+        ctx = init_distributed()
         src = Path(args.i)
         if not src.exists():
             raise FileNotFoundError(f'{args.i} not found')
@@ -151,11 +153,30 @@ def main():
             )
             process_core(core_args, ctx)
             overall_retention_ratio *= args.retention_ratio
+            if ctx.is_main:
+                emit_progress(
+                    'cryosieve',
+                    'iteration-output-written',
+                    i + 1,
+                    args.num_iters,
+                    'iteration',
+                    metadata={
+                        'iteration': i + 1,
+                        'totalIterations': args.num_iters,
+                        'retentionRatio': overall_retention_ratio,
+                        'frequencyAngstrom': float(frequences[i]),
+                    },
+                    checkpoint={'iteration': i + 1, 'starPath': str(dst / f'iter{i + 1}.star')},
+                )
 
         if ctx.is_main:
             logger.info('Execute CryoSieve successfully')
+    except Exception:
+        logger.exception('CryoSieve failed during distributed startup or execution')
+        raise
     finally:
-        destroy_distributed()
+        if ctx is not None:
+            destroy_distributed()
 
 
 if __name__ == '__main__':

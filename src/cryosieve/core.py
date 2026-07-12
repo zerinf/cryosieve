@@ -1,6 +1,6 @@
 import argparse
 import sys
-from .logger import logger
+from .logger import configure_logging, logger
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description = 'CryoSieve core')
@@ -69,6 +69,7 @@ def process(args, ctx = None):
     barrier(ctx)
 
 def main():
+    configure_logging(source='cryosieve-core')
     args = parse_arguments()
 
     from .utility import check_cupy
@@ -76,12 +77,17 @@ def main():
 
     from time import time
     from .sieve import destroy_distributed, init_distributed
-    ctx = init_distributed()
+    ctx = None
     time0 = time()
     try:
+        ctx = init_distributed()
         process(args, ctx)
+    except Exception:
+        logger.exception('CryoSieve core failed during distributed startup or execution')
+        raise
     finally:
-        destroy_distributed()
+        if ctx is not None:
+            destroy_distributed()
     time1 = time()
     if ctx.is_main:
         logger.info(f'Execute cryosieve-core successfully in {time1 - time0:.2f}s')

@@ -26,6 +26,15 @@ DISTRIBUTED_ENV_KEYS = (
     'TORCHELASTIC_MAX_RESTARTS',
 )
 
+PROGRESS_ENV_KEYS = (
+    'COCO_PROGRESS_PATH',
+    'COCO_PROGRESS_SOURCE',
+    'COCO_PROGRESS_STAGE_ID',
+    'COCO_PROGRESS_STEP_KEY',
+    'COCO_PROGRESS_STEP_INDEX',
+    'COCO_PROGRESS_STEP_TOTAL',
+)
+
 COCO_DFR_RECONSTRUCT_MODULES = {
     'copra_spa_3d_reconstruction_dfr.compat.cryosieve_reconstruct',
     'coconut_spa_3d_reconstruction_dfr.compat.cryosieve_reconstruct',
@@ -41,6 +50,8 @@ def job_log_path(output_dir, log_name):
 def child_env(output_dir, job_log_name=None, cryosieve_log=False):
     env = os.environ.copy()
     for key in DISTRIBUTED_ENV_KEYS:
+        env.pop(key, None)
+    for key in PROGRESS_ENV_KEYS:
         env.pop(key, None)
     if job_log_name is None:
         env.pop('COCO_JOB_LOG', None)
@@ -89,6 +100,8 @@ def _child_master_port(half_map, iteration=None):
 
 def distributed_child_env(output_dir, job_log_name, half_map, iteration=None):
     env = os.environ.copy()
+    for key in PROGRESS_ENV_KEYS:
+        env.pop(key, None)
     if job_log_name is None:
         env.pop('COCO_JOB_LOG', None)
     else:
