@@ -80,7 +80,13 @@ def enqueue_and_wait(session, lane, **kwargs):
                 cryosparc_job_total,
                 'cryosparc-job',
                 metadata={'jobId': job_id, 'jobType': job_type, 'dryRun': True},
-                checkpoint={'jobId': job_id, 'status': 'completed'},
+                checkpoint={
+                    'index': cryosparc_jobs_completed,
+                    'total': cryosparc_job_total,
+                    'jobId': job_id,
+                    'jobType': job_type,
+                    'status': 'completed',
+                },
             )
             return job_id
 
@@ -98,7 +104,13 @@ def enqueue_and_wait(session, lane, **kwargs):
                     cryosparc_job_total,
                     'cryosparc-job',
                     metadata={'jobId': job_id, 'jobType': job_type},
-                    checkpoint={'jobId': job_id, 'status': 'completed'},
+                    checkpoint={
+                        'index': cryosparc_jobs_completed,
+                        'total': cryosparc_job_total,
+                        'jobId': job_id,
+                        'jobType': job_type,
+                        'status': 'completed',
+                    },
                 )
                 return job_id
             elif job_status in ['failed', 'killed']:
@@ -223,8 +235,6 @@ def process(args):
     cryosparc_jobs_generated = 0
     cryosparc_jobs_enqueued = 0
     cryosparc_jobs_completed = 0
-    client, user_id = load_cryosparc(args)
-    session = (client, user_id, args.project, args.workspace, args.lane)
 
     # Check args
     particle_meta_paths = parse_meta_paths(args.i)
@@ -257,6 +267,17 @@ def process(args):
         f'particle inputs={len(particle_meta_paths)}, repeat={args.repeat}, '
         f'ref={args.ref is not None}, local={args.local}'
     )
+    emit_progress(
+        'cs-refine',
+        'setup',
+        0,
+        cryosparc_job_total,
+        'cryosparc-job',
+        metadata={'plannedJobs': cryosparc_job_total},
+    )
+
+    client, user_id = load_cryosparc(args)
+    session = (client, user_id, args.project, args.workspace, args.lane)
 
     # Setup
     from concurrent.futures import ThreadPoolExecutor

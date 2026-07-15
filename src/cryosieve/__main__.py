@@ -65,6 +65,15 @@ def main():
         barrier(ctx)
         if not dst.is_dir():
             raise ValueError(f'{args.o} is not a directory or cannot be created')
+        if ctx.is_main:
+            emit_progress(
+                'cryosieve',
+                'setup',
+                0,
+                args.num_iters,
+                'iteration',
+                metadata={'iteration': 0, 'totalIterations': args.num_iters},
+            )
 
         gridding_correction_flag = '--iterative-gridding-correction' if args.iterative_gridding_correction else '--no-iterative-gridding-correction'
         gridding_correction_arg = gridding_correction_flag if is_coco_dfr_reconstruct(args.reconstruct_software) else ''
@@ -166,7 +175,11 @@ def main():
                         'retentionRatio': overall_retention_ratio,
                         'frequencyAngstrom': float(frequences[i]),
                     },
-                    checkpoint={'iteration': i + 1, 'starPath': str(dst / f'iter{i + 1}.star')},
+                    checkpoint={
+                        'iteration': i + 1,
+                        'total': args.num_iters,
+                        'starPath': str(dst / f'iter{i + 1}.star'),
+                    },
                 )
 
         if ctx.is_main:
