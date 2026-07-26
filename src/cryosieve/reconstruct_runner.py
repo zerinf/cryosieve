@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 from pathlib import Path
@@ -10,6 +11,7 @@ CRYOSIEVE_LOG_NAME = 'cryosieve.log'
 DFR_LOG_NAME = 'copra_spa_3d_reconstruction_dfr.log'
 POSTPROCESS_LOG_NAME = 'postprocess.log'
 COCO_DFR_PARENT_DISTRIBUTED_ENV = 'COCO_DFR_USE_PARENT_DISTRIBUTED'
+COCO_DFR_PARENT_STORE_PREFIX_ENV = 'COCO_DFR_PARENT_STORE_PREFIX'
 
 DISTRIBUTED_ENV_KEYS = (
     'LOCAL_RANK',
@@ -76,26 +78,40 @@ def is_coco_dfr_reconstruct(command):
     return False
 
 
-def _positive_env_int(*names):
-    for name in names:
-        value = os.environ.get(name)
-        if value is None or str(value).strip() == '':
-            continue
-        parsed = int(str(value).strip())
-        if parsed < 1:
-            raise ValueError(f'{name} must be a positive integer')
-        return parsed
-    return None
-
-
-def _child_master_port(half_map, iteration=None):
-    base = _positive_env_int('COCO_MASTER_PORT', 'MASTER_PORT') or 29500
-    half_map_value = int(half_map or 0)
+def _parent_store_prefix(output_dir, half_map, iteration=None, env=None):
+    environment = os.environ if env is None else env
+    half_map_value = int(half_map)
+    if half_map_value not in (1, 2):
+        raise ValueError('half_map must be 1 or 2')
     iteration_value = int(iteration or 0)
-    port = base + 100 + iteration_value * 2 + half_map_value
-    if port > 65535:
-        port = 20000 + (port % 40000)
-    return str(port)
+    if iteration_value < 0:
+        raise ValueError('iteration must be non-negative')
+    run_id = environment.get('TORCHELASTIC_RUN_ID') or environment.get('COCO_RDZV_ID') or ''
+    restart_count = environment.get('TORCHELASTIC_RESTART_COUNT') or '0'
+    identity = '\0'.join((
+        'coco-dfr-parent-store-v1',
+        str(run_id),
+        str(restart_count),
+        str(Path(output_dir).expanduser().resolve()),
+        str(iteration_value),
+        str(half_map_value),
+    ))
+    digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+    return f'coco/dfr/v1/{digest}'
+
+
+def _parent_store_endpoint(env):
+    master_addr = str(env.get('MASTER_ADDR') or '').strip()
+    master_port = str(env.get('MASTER_PORT') or '').strip()
+    if not master_addr:
+        raise ValueError('MASTER_ADDR is required for parent-store DFR')
+    try:
+        port = int(master_port)
+    except ValueError as exc:
+        raise ValueError('MASTER_PORT must be an integer between 1 and 65535 for parent-store DFR') from exc
+    if not 1 <= port <= 65535:
+        raise ValueError('MASTER_PORT must be an integer between 1 and 65535 for parent-store DFR')
+    return master_addr, str(port)
 
 
 def distributed_child_env(output_dir, job_log_name, half_map, iteration=None):
@@ -106,9 +122,11 @@ def distributed_child_env(output_dir, job_log_name, half_map, iteration=None):
         env.pop('COCO_JOB_LOG', None)
     else:
         env['COCO_JOB_LOG'] = str(job_log_path(output_dir, job_log_name))
+    master_addr, master_port = _parent_store_endpoint(env)
     env[COCO_DFR_PARENT_DISTRIBUTED_ENV] = '1'
-    env['MASTER_ADDR'] = env.get('COCO_MASTER_ADDR') or env.get('MASTER_ADDR') or '127.0.0.1'
-    env['MASTER_PORT'] = _child_master_port(half_map, iteration)
+    env[COCO_DFR_PARENT_STORE_PREFIX_ENV] = _parent_store_prefix(output_dir, half_map, iteration, env)
+    env['MASTER_ADDR'] = master_addr
+    env['MASTER_PORT'] = master_port
     return env
 
 
